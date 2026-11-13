@@ -232,7 +232,16 @@ def fetch_real_user_and_tweets_from_x(username: str) -> Dict[str, Any]:
     clean_handle = username.lstrip("@").strip()
     user_info = resolve_real_x_user_public(clean_handle)
     user_id = user_info.get("id")
-    
+        if not user_id:
+        try:
+            req = urllib.request.Request(f"https://api.fxtwitter.com/{clean_handle}", headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                fx = json.loads(resp.read().decode()).get("user", {})
+                user_id = fx.get("id") or f"id_{clean_handle}"
+                if not user_info.get("description"):
+                    user_info["description"] = fx.get("description", "No bio available")
+        except Exception:
+            user_id = f"id_{clean_handle}"
     tweets = []
     if user_id:
         tweets_res = x_api_request(f"/users/{user_id}/tweets", params={"max_results": 5, "tweet.fields": "text,created_at"})
