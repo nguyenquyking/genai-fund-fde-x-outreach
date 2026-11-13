@@ -511,7 +511,7 @@ async def index_page():
             const pid = document.getElementById('dm-recipient').value;
             const text = document.getElementById('dm-text').value;
             const res = await fetch('/api/send-approved', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({participant_id: pid, dm_text: text}) });
-            document.getElementById('dm-output').innerText = JSON.stringify(await res.json(), null, 2);
+            document.getconst data = await res.json(); if (data.dm_compose_url) { window.open(data.dm_compose_url, "_blank"); } document.getElementById('dm-output').innerText = JSON.stringify(data, null, 2);ElementById('dm-output').innerText = JSON.stringify(await res.json(), null, 2);
         }
         async function syncReplies() {
             const res = await fetch('/api/sync-x-replies', { method: 'POST' });
