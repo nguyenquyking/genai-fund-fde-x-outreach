@@ -1,29 +1,35 @@
-# GenAI Fund FDE Assignment — One-Page Write-Up (v2.0)
+# GenAI Fund FDE Assignment — One-Page Write-Up (v3.0 Live Engine)
+
 **Author:** Nguyễn Trọng Quý
 
-## 1. Approach & System Architecture (v2.0)
-To give GenAI Fund a usable, reliable tool to initiate real conversations with AI and robotics builders in Southeast Asia, I built a single-command **FastAPI + SQLite + Interactive Operator Console** (`app.py`) structured around four stages:
-1. **Hybrid Seed Discovery & 4-Pillar Explainable Scoring (0–100):** Accepts target segment queries and seed X handles (`GET /2/users/by` when live token is configured + pre-seeded Southeast Asia AI/Robotics dataset). Every candidate is classified by role archetype (*Founder / Spinout Builder*, *AI & Robotics Researcher*, *AI Infra Engineer*, or *Noise*) and scored across four transparent pillars: **Technical Depth (0–35)**, **SEA Ecosystem Fit (0–25)**, **Conversation Readiness Hook (0–25)**, and **Signal-to-Noise Specificity (0–15)**.
-2. **Evidence-Grounded Personalisation + 5-Point AI Output Verifier:** Passes the candidate's bio and highest-signal recent post into `gemini-2.5-flash` (with a deterministic evidence-template fallback when offline) to draft a concise DM referencing real metrics (*19ms Jetson Orin latency*, *FP4 KV-cache throughput*, *$120 tactile sensor BOM*). Before human review, an automated verifier (`verify_dm_grounding`) audits every draft across 5 rules: *Evidence Token Anchor*, *Zero Invented Familiarity (anti-cliché filter)*, *Question Hook (`?`)*, *Length Cap (60–450 chars)*, and *No Cold Link Spam*.
-3. **Human-in-the-Loop Gate & Multi-Layer Dispatch Guardrails:** Operators edit, regenerate, approve, reject, or block drafts in the web console. Approved DMs are sent via X API v2 (`POST /2/dm_conversations/with/:participant_id/messages`) or Safe Sandbox Mode. Four hard locks run before every send: (a) SQLite `UNIQUE(participant_id)` + SHA-256 digest lock preventing duplicate DMs, (b) Controlled Test Account Allowlist check, (c) explicit `status == 'approved'` check, and (d) rolling 15-minute (`15/15m`) & 24-hour (`1,440/24h`) rate-limit enforcement.
-4. **Live `GET /2/dm_events` Reply Sync, Intent Triage & Audit Trail:** Polls or simulates inbound replies, classifies intent (*Warm Interest / Pilot Question* -> `needs_attention`, *Opt-out* -> `blocked`, *General Reply* -> `replied`), logs all state transitions to `audit_logs`, and exports full campaign reports to CSV (`/api/export.csv`).
+## 1. Approach & System Architecture (v3.0 Live Engine)
 
-## 2. Key Trade-Offs & Practical Choices
-- **Single-File FastAPI + Embedded SQLite (WAL) vs. Distributed Stack:** Evaluators can clone and run the tool in under 5 minutes with zero Docker or cloud DB friction while retaining ACID transactions and hard `UNIQUE` anti-duplication locks.
-- **Hybrid Live X API v2 + Controlled Test Sandbox:** Defaults to `enforce_test_only=true` with a pre-populated SEA AI/Robotics cohort, a 1-click *Add Controlled Test Account* form, and a *Test Duplicate Send Block* diagnostic button so reviewers can verify both happy paths and blocked edge cases safely.
-- **Mandatory Human Approval + Link-Free First DM:** Cold DMs with links trigger spam filters and incur a $0.20 link surcharge on X's 2026 rate card; enforcing human review and link-free opening questions maximizes reply rates and account safety.
+To provide GenAI Fund with a production-grade, highly reliable tool to discover and initiate real conversations with AI and robotics builders in Southeast Asia, I built a full-stack system (**app.py**) structured around four stages:
 
-## 3. Operating Costs & Rate Limits (2026 Pricing)
-- **X API v2 Reads (100 users + 500 posts):** $0.010/user + $0.005/post = **$3.50**
-- **X API v2 DM Sends (100 approved DMs):** $0.015/DM (capped at 15/15m & 1,440/24h) = **$1.50**
-- **Gemini 2.5 Flash Personalisation (100 drafts):** **$0.00** (Free Tier) or **$0.05** (Paid Tier: $0.30/1M in, $2.50/1M out)
-- **Total per 100 Qualified Prospects:** **~$5.05** on Pay-Per-Use.
+1. **Dual Real-Account OAuth Connection & Verification:**
+   - **OAuth 1.0a HMAC-SHA1 User Context:** Accepts consumer keys and user tokens (`X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`) directly for seamless server-to-server API authorization.
+   - **OAuth 2.0 PKCE Flow:** Supports browser authorization via `/oauth/x/start` and token exchange callback via `/oauth/x/callback`.
+   - **Account Verification:** Authenticates the connected account profile via `GET /2/users/me` at `/api/auth/verify`.
 
-## 4. What Comes Next
-1. OAuth 2.0 PKCE `/oauth/x/login` flow with encrypted refresh-token rotation (`offline.access`).
-2. Scheduled 5-minute polling worker for `GET /2/dm_events` with Slack/Notion CRM webhook alerts.
-3. Citation-verified graph expansion across followers/co-authors of warm responders.
+2. **Live X User & Tweet Resolution Engine:**
+   - Resolves real candidate handles using `GET /2/users/by/username/:username` to obtain official user profiles and numerical IDs.
+   - Fetches candidate posts via `GET /2/users/:id/tweets` or recent post search via `GET /2/tweets/search/recent`.
+   - Includes graceful fallbacks via X Public Syndication and oEmbed (`resolve_tweet_oembed_text`).
+   - Supports **Strict Live X API Mode (`require_live_x_api`)**: cleanly blocks fallback synthetic data when live access is demanded.
 
-## 5. How AI Tools Were Used & Verified
-- Used AI to verify 2026 X API v2 DM endpoint specs/rate limits, design the 4-pillar scoring rubric, and build the FastAPI/SQLite state machine.
-- Verified via `python3 app.py --self-test` (6-stage automated verification suite testing discovery scoring, 5-point AI grounding checks, unapproved-send blocking, SQLite `UNIQUE(participant_id)` duplicate-send blocking, non-allowlisted stranger blocking, and reply intent triage).
+3. **Grounded Personalization & Real Outbound DM Dispatch:**
+   - Leverages **Gemini 2.5 Flash** (or deterministic grounded templates) to draft hyper-targeted DMs grounded in candidates' real post evidence.
+   - Enforces human-in-the-loop review, anti-spam grounding validation (`verify_dm_grounding`), rate limits, and SQLite `UNIQUE(participant_id)` duplication locks.
+   - Dispatches real DMs directly to numerical recipient IDs via `POST /2/dm_conversations/with/:participant_id/messages`.
+
+4. **Real Inbound Reply Synchronization & Intent Triage:**
+   - Polls real conversation events via `GET /2/dm_conversations/with/:participant_id/dm_events`.
+   - Filters events where `sender_id == participant_id` to automatically capture authentic candidate replies, update lead status, and log complete audit history in SQLite.
+
+---
+
+## 2. Key Technical Choices & Operational Safety
+
+- **Runtime Credentials Storage (`runtime_credentials` table):** Allows live credential injection without restarting the web service.
+- **Strict Anti-Spam & Rate-Limit Enforcement:** Hard limits of 15 DMs/15m and 1,440 DMs/24h with SHA-256 message deduplication.
+- **Automated Self-Test Suite:** 7-step test runner (`run_self_test`) covering DB schema, auth verification, candidate lookup, LLM grounding, safety constraints, outbound messaging, and response sync.
