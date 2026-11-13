@@ -23,7 +23,8 @@ from fastapi import FastAPI, HTTPException, Response, Request, Query
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 DB_PATH = os.environ.get("OUTREACH_DB_PATH", os.environ.get("DB_PATH", "outreach_state.db"))
 SCHEME = "https"
 X_API_BASE = f"{SCHEME}://api.twitter.com/2"
