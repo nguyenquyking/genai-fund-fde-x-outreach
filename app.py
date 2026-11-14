@@ -360,7 +360,7 @@ async def discover_talent(request: Request):
         reasons = [f"SEA {c['location']} AI/Robotics profile", f"Segment match: {c['segment']}"]
         if seed_list: reasons.append(f"Seed graph proximity: {', '.join(seed_list[:2])}")
         draft_dm = f"Hi {c['name'].split()[0]}, loved your work on {c['bio'].split('.')[0]}. At GenAI Fund we're backing SEA AI & Robotics builders—would love to connect!"
-    scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
+        scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
     scored.sort(key=lambda x: x["fit_score"], reverse=True)
     return {"status": "ok", "segment": segment, "seed_accounts": seed_list, "total_scanned": len(SEED_CANDIDATES), "filtered_noise_count": filtered_noise_count, "candidates": scored}
 @app.post("/api/candidates/resolve")
