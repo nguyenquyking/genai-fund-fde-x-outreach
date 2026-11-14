@@ -344,23 +344,23 @@ SEED_CANDIDATES = [
 ]
 @app.post("/api/discover")
 async def discover_talent(request: Request):
-raw = await request.body()
-data = json.loads(raw) if raw else {}
-segment = (data.get("segment") or data.get("target_segment") or "AI & Robotics Engineers (SEA)").strip()
-seeds_raw = data.get("seed_accounts") or ""
-seed_list = [s.strip() for s in (seeds_raw.split(",") if isinstance(seeds_raw, str) else seeds_raw) if s and s.strip()]
-spam_kw = ["giveaway", "airdrop", "100x", "crypto", "promo", "bot"]
-valid = [c for c in SEED_CANDIDATES if not c.get("is_spam") and not any(k in c.get("bio", "").lower() for k in spam_kw)]
-filtered_noise_count = len(SEED_CANDIDATES) - len(valid)
-scored = []
-for c in valid:
-bio_l = c["bio"].lower()
-score = 78 + (10 if any(k in bio_l for k in ["robotics", "embodied", "ros2", "vla", "slam", "sim-to-real"]) else 0) + (6 if any(k in bio_l for k in ["ai", "llm", "agent", "pytorch", "gpu", "tensorrt"]) else 0) + (4 if segment.lower() in c["segment"].lower() or any(w in bio_l for w in segment.lower().split() if len(w) > 2) else 0) + (2 if c.get("followers", 0) >= 3000 else 0)
-fit_score = min(99, score)
-reasons = [f"SEA {c['location']} AI/Robotics profile", f"Segment match: {c['segment']}"]
-if seed_list: reasons.append(f"Seed graph proximity: {', '.join(seed_list[:2])}")
-draft_dm = f"Hi {c['name'].split()[0]}, loved your work on {c['bio'].split('.')[0]}. At GenAI Fund we're backing SEA AI & Robotics builders—would love to connect!"
-scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
+    raw = await request.body()
+    data = json.loads(raw) if raw else {}
+    segment = (data.get("segment") or data.get("target_segment") or "AI & Robotics Engineers (SEA)").strip()
+    seeds_raw = data.get("seed_accounts") or ""
+    seed_list = [s.strip() for s in (seeds_raw.split(",") if isinstance(seeds_raw, str) else seeds_raw) if s and s.strip()]
+    spam_kw = ["giveaway", "airdrop", "100x", "crypto", "promo", "bot"]
+    valid = [c for c in SEED_CANDIDATES if not c.get("is_spam") and not any(k in c.get("bio", "").lower() for k in spam_kw)]
+    filtered_noise_count = len(SEED_CANDIDATES) - len(valid)
+    scored = []
+    for c in valid:
+        bio_l = c["bio"].lower()
+        score = 78 + (10 if any(k in bio_l for k in ["robotics", "embodied", "ros2", "vla", "slam", "sim-to-real"]) else 0) + (6 if any(k in bio_l for k in ["ai", "llm", "agent", "pytorch", "gpu", "tensorrt"]) else 0) + (4 if segment.lower() in c["segment"].lower() or any(w in bio_l for w in segment.lower().split() if len(w) > 2) else 0) + (2 if c.get("followers", 0) >= 3000 else 0)
+        fit_score = min(99, score)
+        reasons = [f"SEA {c['location']} AI/Robotics profile", f"Segment match: {c['segment']}"]
+        if seed_list: reasons.append(f"Seed graph proximity: {', '.join(seed_list[:2])}")
+        draft_dm = f"Hi {c['name'].split()[0]}, loved your work on {c['bio'].split('.')[0]}. At GenAI Fund we're backing SEA AI & Robotics builders—would love to connect!"
+    scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
     scored.sort(key=lambda x: x["fit_score"], reverse=True)
     return {"status": "ok", "segment": segment, "seed_accounts": seed_list, "total_scanned": len(SEED_CANDIDATES), "filtered_noise_count": filtered_noise_count, "candidates": scored}
 @app.post("/api/candidates/resolve")
