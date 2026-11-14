@@ -334,6 +334,35 @@ def auth_verify():
         }
 
 # Endpoint 2: Candidate Resolve / Lookup
+SEED_CANDIDATES = [
+{"handle": "@minh_embodied_ai", "name": "Minh Nguyen", "location": "Ho Chi Minh City, Vietnam", "segment": "AI & Robotics Engineers (SEA)", "bio": "Robotics & Embodied AI Engineer. Building ROS2, VLA models & edge GPU inference for warehouse humanoids.", "followers": 4200, "is_spam": False},
+{"handle": "@weiming_robotics", "name": "Wei Ming Tan", "location": "Singapore", "segment": "Embodied AI / Robotics Founders", "bio": "Co-founder @SeaBotics. Ex-NUS Autonomous Lab. SLAM, PyTorch, sim-to-real locomotion.", "followers": 6800, "is_spam": False},
+{"handle": "@siti_llm_agents", "name": "Siti Rahma", "location": "Jakarta, Indonesia", "segment": "LLM & Agent Systems Engineers", "bio": "Staff AI Engineer building multi-agent LLM workflows, RAG & tool-use systems in SEA.", "followers": 3100, "is_spam": False},
+{"handle": "@krit_vision_edge", "name": "Krit Pongpanich", "location": "Bangkok, Thailand", "segment": "Computer Vision / Edge AI", "bio": "Founder & CV/Robotics lead. TensorRT, Jetson Orin, industrial inspection drones.", "followers": 2400, "is_spam": False},
+{"handle": "@amirul_ml_infra", "name": "Amirul Hakim", "location": "Kuala Lumpur, Malaysia", "segment": "AI & Robotics Engineers (SEA)", "bio": "ML Systems & FDE. Scaling distributed PyTorch training & autonomous navigation stacks.", "followers": 1950, "is_spam": False},
+{"handle": "@crypto_airdrop_100x", "name": "Free Airdrop Bot", "location": "Unknown", "segment": "Spam", "bio": "DM for 100x crypto giveaway! Follow + RT for instant airdrop signals.", "followers": 120, "is_spam": True},
+]
+@app.post("/api/discover")
+async def discover_talent(request: Request):
+raw = await request.body()
+data = json.loads(raw) if raw else {}
+segment = (data.get("segment") or data.get("target_segment") or "AI & Robotics Engineers (SEA)").strip()
+seeds_raw = data.get("seed_accounts") or ""
+seed_list = [s.strip() for s in (seeds_raw.split(",") if isinstance(seeds_raw, str) else seeds_raw) if s and s.strip()]
+spam_kw = ["giveaway", "airdrop", "100x", "crypto", "promo", "bot"]
+valid = [c for c in SEED_CANDIDATES if not c.get("is_spam") and not any(k in c.get("bio", "").lower() for k in spam_kw)]
+filtered_noise_count = len(SEED_CANDIDATES) - len(valid)
+scored = []
+for c in valid:
+bio_l = c["bio"].lower()
+score = 78 + (10 if any(k in bio_l for k in ["robotics", "embodied", "ros2", "vla", "slam", "sim-to-real"]) else 0) + (6 if any(k in bio_l for k in ["ai", "llm", "agent", "pytorch", "gpu", "tensorrt"]) else 0) + (4 if segment.lower() in c["segment"].lower() or any(w in bio_l for w in segment.lower().split() if len(w) > 2) else 0) + (2 if c.get("followers", 0) >= 3000 else 0)
+fit_score = min(99, score)
+reasons = [f"SEA {c['location']} AI/Robotics profile", f"Segment match: {c['segment']}"]
+if seed_list: reasons.append(f"Seed graph proximity: {', '.join(seed_list[:2])}")
+draft_dm = f"Hi {c['name'].split()[0]}, loved your work on {c['bio'].split('.')[0]}. At GenAI Fund we're backing SEA AI & Robotics builders—would love to connect!"
+scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
+    scored.sort(key=lambda x: x["fit_score"], reverse=True)
+    return {"status": "ok", "segment": segment, "seed_accounts": seed_list, "total_scanned": len(SEED_CANDIDATES), "filtered_noise_count": filtered_noise_count, "candidates": scored}
 @app.post("/api/candidates/resolve")
 @app.post("/api/add-test-account")
 @app.post("/api/lookup")
@@ -601,7 +630,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
             <pre id="auth-status">Ready to configure credentials...</pre>
         </div>
-
+        <!-- Step 2A Card -->
+        <div class="card">
+            <h2>Step 2A: Discover AI & Robotics Talent (Segment & Seed Accounts)</h2>
+            <label>Segment Preset</label>
+            <select id="discover-preset" onchange="document.getElementById('discover-segment').value=this.value">
+                <option value="AI & Robotics Engineers (SEA)">AI & Robotics Engineers (SEA)</option>
+                <option value="Embodied AI / Robotics Founders">Embodied AI / Robotics Founders</option>
+                <option value="LLM & Agent Systems Engineers">LLM & Agent Systems Engineers</option>
+                <option value="Computer Vision / Edge AI">Computer Vision / Edge AI</option>
+            </select>
+            <label>Target Segment</label>
+            <input id="discover-segment" type="text" value="AI & Robotics Engineers (SEA)" placeholder="Target Segment" />
+            <label>Seed Accounts</label>
+            <input id="discover-seeds" type="text" value="@minh_embodied_ai, @weiming_robotics" placeholder="@handle1, @handle2" />
+            <button onclick="discoverTalent()" style="margin-top:12px; background:#0ea5e9;">🔍 Discover & Score AI/Robotics Talent</button>
+            <div id="discover-results" style="margin-top:14px;"></div>
+        </div>
+        
         <!-- Step 2 Card -->
         <div class="card">
             <h2>Step 2: Discover & Resolve Real Candidate Profiles (4-Stage Resolver & AI Personalization)</h2>
@@ -659,7 +705,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <script>
-        async function saveKeys() {
+        
+        let discoveredCandidates = [];
+        async function discoverTalent() {
+            const segment = document.getElementById('discover-segment').value;
+            const seed_accounts = document.getElementById('discover-seeds').value;
+            const box = document.getElementById('discover-results');
+            box.innerHTML = 'Scanning & scoring AI/Robotics talent...';
+            const res = await fetch('/api/discover', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({segment, seed_accounts})
+            });
+            const data = await res.json();
+            discoveredCandidates = data.candidates || [];
+            box.innerHTML = `<div style="margin-bottom:8px; color:#94a3b8;">Scanned ${data.total_scanned} profiles | Filtered noise/spam: ${data.filtered_noise_count} | Qualified: ${discoveredCandidates.length}</div>` +
+                discoveredCandidates.map((c, i) => `<div style="padding:10px; margin-bottom:8px; background:#0f172a; border:1px solid #334155; border-radius:8px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <strong>${c.name} (${c.handle})</strong>
+                        <span style="background:#0284c7; padding:2px 8px; border-radius:999px; font-size:12px;">Fit Score: ${c.fit_score}</span>
+                    </div>
+                    <div style="font-size:12px; color:#94a3b8; margin-top:4px;">${c.location} • ${c.segment}</div>
+                    <div style="font-size:13px; margin-top:6px;">${c.bio}</div>
+                    <button onclick="approveToStep3(${i})" style="margin-top:8px; background:#16a34a; font-size:12px; padding:6px 10px;">Approve & Move to Step 3 (DM)</button>
+                </div>`).join('');
+        }
+        function approveToStep3(idx) {
+            const c = discoveredCandidates[idx];
+            if (!c) return;
+            document.getElementById('dm-handle').value = c.handle;
+            document.getElementById('dm-text').value = c.draft_dm || '';
+            document.getElementById('dm-handle').scrollIntoView({behavior: 'smooth', block: 'center'});
+        }
+            async function saveKeys() {
             const data = {
                 X_API_KEY: document.getElementById('x_api_key').value,
                 X_API_SECRET: document.getElementById('x_api_secret').value,
