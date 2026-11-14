@@ -335,34 +335,148 @@ def auth_verify():
 
 # Endpoint 2: Candidate Resolve / Lookup
 SEED_CANDIDATES = [
-{"handle": "@minh_embodied_ai", "name": "Minh Nguyen", "location": "Ho Chi Minh City, Vietnam", "segment": "AI & Robotics Engineers (SEA)", "bio": "Robotics & Embodied AI Engineer. Building ROS2, VLA models & edge GPU inference for warehouse humanoids.", "followers": 4200, "is_spam": False},
-{"handle": "@weiming_robotics", "name": "Wei Ming Tan", "location": "Singapore", "segment": "Embodied AI / Robotics Founders", "bio": "Co-founder @SeaBotics. Ex-NUS Autonomous Lab. SLAM, PyTorch, sim-to-real locomotion.", "followers": 6800, "is_spam": False},
-{"handle": "@siti_llm_agents", "name": "Siti Rahma", "location": "Jakarta, Indonesia", "segment": "LLM & Agent Systems Engineers", "bio": "Staff AI Engineer building multi-agent LLM workflows, RAG & tool-use systems in SEA.", "followers": 3100, "is_spam": False},
-{"handle": "@krit_vision_edge", "name": "Krit Pongpanich", "location": "Bangkok, Thailand", "segment": "Computer Vision / Edge AI", "bio": "Founder & CV/Robotics lead. TensorRT, Jetson Orin, industrial inspection drones.", "followers": 2400, "is_spam": False},
-{"handle": "@amirul_ml_infra", "name": "Amirul Hakim", "location": "Kuala Lumpur, Malaysia", "segment": "AI & Robotics Engineers (SEA)", "bio": "ML Systems & FDE. Scaling distributed PyTorch training & autonomous navigation stacks.", "followers": 1950, "is_spam": False},
-{"handle": "@crypto_airdrop_100x", "name": "Free Airdrop Bot", "location": "Unknown", "segment": "Spam", "bio": "DM for 100x crypto giveaway! Follow + RT for instant airdrop signals.", "followers": 120, "is_spam": True},
+{"handle": "@RemiCadene", "name": "Remi Cadene", "location": "Paris, France", "segment": "AI & Robotics Engineers (SEA)", "bio": "Lead Scientist LeRobot @ Hugging Face — Open-Source Robotics, Bimanual Teleoperation & VLA Policies"},
+{"handle": "@DrJimFan", "name": "Jim Fan", "location": "Santa Clara, CA", "segment": "Embodied AI / Robotics Founders", "bio": "Director of AI & Distinguished Scientist @ NVIDIA — GEAR Lab, Project GR00T Humanoid Robotics & Embodied Agents"},
+{"handle": "@chipro", "name": "Chip Huyen", "location": "San Francisco / Vietnam", "segment": "LLM & Agent Systems Engineers", "bio": "Vietnamese AI Founder & Author of AI Engineering / Designing ML Systems — Production LLM & Agentic Infrastructure"},
+{"handle": "@thangluong", "name": "Minh-Thang Luong", "location": "Mountain View / Vietnam", "segment": "LLM & Agent Systems Engineers", "bio": "Vietnamese Staff Research Scientist @ Google DeepMind — AlphaGeometry, Reasoning LLMs & Vietnam AI Ecosystem"},
+{"handle": "@hausman_k", "name": "Karol Hausman", "location": "San Francisco, CA", "segment": "Embodied AI / Robotics Founders", "bio": "Co-founder & CEO @ Physical Intelligence (pi0) — General-Purpose Robot Foundation Models & Sim2Real Manipulation"},
+{"handle": "@woosuk_k", "name": "Woosuk Kwon", "location": "San Francisco, CA", "segment": "LLM & Agent Systems Engineers", "bio": "Creator of vLLM & PagedAttention — High-Throughput LLM/VLM Inference Engine & Serving Kernels"},
+{"handle": "@jerryjliu0", "name": "Jerry Liu", "location": "San Francisco, CA", "segment": "LLM & Agent Systems Engineers", "bio": "Co-founder & CEO @ LlamaIndex — Multi-Agent Document Workflows, RAG & Context Infrastructure"},
+{"handle": "@hwchase17", "name": "Harrison Chase", "location": "San Francisco, CA", "segment": "LLM & Agent Systems Engineers", "bio": "Co-founder & CEO @ LangChain — Agentic Orchestration, LangGraph & Evaluation Tooling"},
+{"handle": "@GhostGeta777", "name": "GhostGeta777", "location": "Ho Chi Minh City, Vietnam", "segment": "Live Test Account", "bio": "Controlled Live Test Account on X for real DM dispatch verification"},
 ]
 @app.post("/api/discover")
 async def discover_talent(request: Request):
-    raw = await request.body()
-    data = json.loads(raw) if raw else {}
-    segment = (data.get("segment") or data.get("target_segment") or "AI & Robotics Engineers (SEA)").strip()
-    seeds_raw = data.get("seed_accounts") or ""
-    seed_list = [s.strip() for s in (seeds_raw.split(",") if isinstance(seeds_raw, str) else seeds_raw) if s and s.strip()]
-    spam_kw = ["giveaway", "airdrop", "100x", "crypto", "promo", "bot"]
-    valid = [c for c in SEED_CANDIDATES if not c.get("is_spam") and not any(k in c.get("bio", "").lower() for k in spam_kw)]
-    filtered_noise_count = len(SEED_CANDIDATES) - len(valid)
+    try:
+        data = await request.json() or {}
+    except Exception:
+        data = {}
+    segment = (data.get("segment") or "AI & Robotics Engineers (SEA)").strip()
+    seed_raw = data.get("seed_accounts") or []
+    if isinstance(seed_raw, str):
+        seed_list = [s.strip() for s in seed_raw.split(",") if s.strip()]
+    else:
+        seed_list = [str(s).strip() for s in seed_raw if str(s).strip()]
+
+    candidates_pool = []
+    seen_handles = set()
+
+    for seed_handle in seed_list:
+        clean_seed = seed_handle.lstrip("@").strip()
+        if not clean_seed or clean_seed.lower() in seen_handles:
+            continue
+        seen_handles.add(clean_seed.lower())
+        u_info, has_real_id = fetch_real_user_and_tweets_from_x(clean_seed)
+        candidates_pool.append({
+            "handle": f"@{u_info.get('username') or clean_seed}",
+            "name": u_info.get("name") or clean_seed,
+            "location": "Live X Discovery",
+            "segment": segment,
+            "bio": u_info.get("bio") or "Live X profile discovered from seed input.",
+            "user_id": str(u_info.get("id") or ""),
+            "followers_count": int(u_info.get("followers_count") or 0),
+            "tweets": u_info.get("tweets") or [],
+            "has_real_numeric_id": has_real_id,
+            "is_seed": True,
+        })
+
+    seg_lower = segment.lower()
+    seg_words = [w for w in seg_lower.replace("/", " ").replace("(", " ").replace(")", " ").replace("&", " ").split() if len(w) >= 2]
+
+    matched_seeds = []
+    for c in SEED_CANDIDATES:
+        clean_c = c["handle"].lstrip("@").strip()
+        if clean_c.lower() in seen_handles:
+            continue
+        haystack = f"{c['segment']} {c['bio']} {c['location']}".lower()
+        if c["segment"].lower() == seg_lower or any(w in haystack for w in seg_words):
+            matched_seeds.append(c)
+
+    if not matched_seeds:
+        matched_seeds = [c for c in SEED_CANDIDATES if c["handle"].lstrip("@").strip().lower() not in seen_handles]
+
+    for c in matched_seeds:
+        clean_c = c["handle"].lstrip("@").strip()
+        if clean_c.lower() in seen_handles:
+            continue
+        seen_handles.add(clean_c.lower())
+        u_info, has_real_id = fetch_real_user_and_tweets_from_x(clean_c)
+        live_bio = (u_info.get("bio") or "").strip()
+        combined_bio = live_bio if live_bio else c["bio"]
+        candidates_pool.append({
+            "handle": f"@{u_info.get('username') or clean_c}",
+            "name": u_info.get("name") or c["name"],
+            "location": c["location"],
+            "segment": c["segment"],
+            "bio": combined_bio,
+            "curated_work": c["bio"],
+            "user_id": str(u_info.get("id") or ""),
+            "followers_count": int(u_info.get("followers_count") or 0),
+            "tweets": u_info.get("tweets") or [],
+            "has_real_numeric_id": has_real_id,
+            "is_seed": False,
+        })
+
     scored = []
-    for c in valid:
-        bio_l = c["bio"].lower()
-        score = 78 + (10 if any(k in bio_l for k in ["robotics", "embodied", "ros2", "vla", "slam", "sim-to-real"]) else 0) + (6 if any(k in bio_l for k in ["ai", "llm", "agent", "pytorch", "gpu", "tensorrt"]) else 0) + (4 if segment.lower() in c["segment"].lower() or any(w in bio_l for w in segment.lower().split() if len(w) > 2) else 0) + (2 if c.get("followers", 0) >= 3000 else 0)
-        fit_score = min(99, score)
-        reasons = [f"SEA {c['location']} AI/Robotics profile", f"Segment match: {c['segment']}"]
-        if seed_list: reasons.append(f"Seed graph proximity: {', '.join(seed_list[:2])}")
-        draft_dm = f"Hi {c['name'].split()[0]}, loved your work on {c['bio'].split('.')[0]}. At GenAI Fund we're backing SEA AI & Robotics builders—would love to connect!"
-        scored.append({**c, "fit_score": fit_score, "fit_reasons": "; ".join(reasons), "draft_dm": draft_dm})
+    for c in candidates_pool:
+        clean_handle = c["handle"].lstrip("@").strip()
+        profile_url = "https://x" + ".com/" + clean_handle
+        bio_text = f"{c.get('bio', '')} {c.get('curated_work', '')} {c.get('segment', '')}".lower()
+
+        score = 62
+        if c.get("segment", "").lower() == seg_lower:
+            score += 18
+        kw_hits = sum(1 for w in seg_words if w in bio_text)
+        score += min(15, kw_hits * 5)
+        if c.get("is_seed"):
+            score += 8
+        if c.get("followers_count", 0) >= 1000:
+            score += 4
+        score = min(99, max(0, score))
+
+        reasons = []
+        if c.get("is_seed"):
+            reasons.append("Direct seed account resolved live from X")
+        if c.get("segment", "").lower() == seg_lower or kw_hits > 0:
+            reasons.append(f"Strong match for segment: {segment}")
+        if c.get("has_real_numeric_id"):
+            reasons.append(f"Verified Real X ID ({c['user_id']}) with {c['followers_count']:,} followers")
+        else:
+            reasons.append(f"Profile checked on X ({c['followers_count']:,} followers)")
+
+        work_ref = c.get("curated_work") or c.get("bio") or "your recent AI/robotics work"
+        tweets = c.get("tweets") or []
+        if tweets and isinstance(tweets[0], dict) and tweets[0].get("text"):
+            tweet_snip = tweets[0]["text"][:100].replace("\n", " ")
+            reasons.append(f"Recent X post: {tweet_snip}")
+        first_name = (c.get("name") or clean_handle).split()[0]
+        draft_dm = f"Hi {first_name}, I've been following your work ({work_ref[:110]}) and would love to connect about GenAI Fund's FDE / Robotics & AI builders network in SEA!"
+
+        scored.append({
+            "handle": c["handle"],
+            "name": c["name"],
+            "location": c["location"],
+            "segment": c["segment"],
+            "bio": c["bio"],
+            "user_id": c["user_id"],
+            "profile_url": profile_url,
+            "followers_count": c["followers_count"],
+            "has_real_numeric_id": c["has_real_numeric_id"],
+            "fit_score": score,
+            "fit_reasons": reasons,
+            "draft_dm": draft_dm,
+        })
+
     scored.sort(key=lambda x: x["fit_score"], reverse=True)
-    return {"status": "ok", "segment": segment, "seed_accounts": seed_list, "total_scanned": len(SEED_CANDIDATES), "filtered_noise_count": filtered_noise_count, "candidates": scored}
+    return {
+        "status": "ok",
+        "segment": segment,
+        "seed_accounts": seed_list,
+        "total_scanned": len(scored),
+        "filtered_noise_count": 0,
+        "candidates": scored,
+    }
+
 @app.post("/api/candidates/resolve")
 @app.post("/api/add-test-account")
 @app.post("/api/lookup")
@@ -643,7 +757,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <label>Target Segment</label>
             <input id="discover-segment" type="text" value="AI & Robotics Engineers (SEA)" placeholder="Target Segment" />
             <label>Seed Accounts</label>
-            <input id="discover-seeds" type="text" value="@minh_embodied_ai, @weiming_robotics" placeholder="@handle1, @handle2" />
+            <input id="discover-seeds" type="text" value="@RemiCadene, @chipro, @GhostGeta777" placeholder="@handle1, @handle2" />
             <button onclick="discoverTalent()" style="margin-top:12px; background:#0ea5e9;">🔍 Discover & Score AI/Robotics Talent</button>
             <div id="discover-results" style="margin-top:14px;"></div>
         </div>
@@ -722,10 +836,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             box.innerHTML = `<div style="margin-bottom:8px; color:#94a3b8;">Scanned ${data.total_scanned} profiles | Filtered noise/spam: ${data.filtered_noise_count} | Qualified: ${discoveredCandidates.length}</div>` +
                 discoveredCandidates.map((c, i) => `<div style="padding:10px; margin-bottom:8px; background:#0f172a; border:1px solid #334155; border-radius:8px;">
                     <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <strong>${c.name} (${c.handle})</strong>
+                        <strong>${c.name} (<a href="${c.profile_url || ('https://x.com/' + c.handle.replace('@', ''))}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;">${c.handle}</a>)</strong>
                         <span style="background:#0284c7; padding:2px 8px; border-radius:999px; font-size:12px;">Fit Score: ${c.fit_score}</span>
                     </div>
-                    <div style="font-size:12px; color:#94a3b8; margin-top:4px;">${c.location} • ${c.segment}</div>
+                    <div style="font-size:12px; color:#94a3b8; margin-top:4px;">${c.location} | ${c.segment} | Real X ID: ${c.user_id || 'N/A'} | Followers: ${(c.followers_count || 0).toLocaleString()}</div>
                     <div style="font-size:13px; margin-top:6px;">${c.bio}</div>
                     <button onclick="approveToStep3(${i})" style="margin-top:8px; background:#16a34a; font-size:12px; padding:6px 10px;">Approve & Move to Step 3 (DM)</button>
                 </div>`).join('');
@@ -733,7 +847,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function approveToStep3(idx) {
             const c = discoveredCandidates[idx];
             if (!c) return;
-            document.getElementById('dm-handle').value = c.handle;
+            document.getElementById('dm-recipient').value = c.user_id || '';
+        document.getElementById('dm-handle').value = c.handle;
             document.getElementById('dm-text').value = c.draft_dm || '';
             document.getElementById('dm-handle').scrollIntoView({behavior: 'smooth', block: 'center'});
         }
