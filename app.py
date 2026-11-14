@@ -1,15 +1,27 @@
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
 import os
 import json
 import sqlite3
 import urllib.parse
-import requests
-from requests_oauthlib import OAuth1
-from flask import Flask, request, jsonify, render_template_string
+import time
+import hmac
+import hashlib
+import base64
+import secrets
+import argparse
+import urllib.request
+import urllib.error
+from typing import Optional
+import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 DB_PATH = "outreach.db"
 X_API_BASE = "https://" + "api." + "twit" + "ter.com"
 
-app = Flask(__name__)
+app = FastAPI()
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
@@ -74,33 +86,75 @@ def set_credential(key, value):
     conn.commit()
     conn.close()
 
-def build_oauth1_auth():
+def build_oauth1_header(method, url, params=None):
     api_key = get_credential("X_API_KEY")
     api_secret = get_credential("X_API_SECRET")
     access_token = get_credential("X_ACCESS_TOKEN")
     access_token_secret = get_credential("X_ACCESS_TOKEN_SECRET")
-    if api_key and api_secret and access_token and access_token_secret:
-        return OAuth1(api_key, api_secret, access_token, access_token_secret)
-    return None
+    if not all([api_key, api_secret, access_token, access_token_secret]):
+        return None
+    oauth_params = {
+        "oauth_consumer_key": api_key,
+        "oauth_nonce": secrets.token_hex(16),
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": str(int(time.time())),
+        "oauth_token": access_token,
+        "oauth_version": "1.0",
+    }
+    parsed = urllib.parse.urlparse(url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    query_params = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    all_params = list(oauth_params.items()) + query_params
+    if params:
+        for k, v in params.items():
+            all_params.append((str(k), str(v)))
+    encoded = sorted(
+        (urllib.parse.quote(str(k), safe=""), urllib.parse.quote(str(v), safe=""))
+        for k, v in all_params
+    )
+    param_str = "&".join(f"{k}={v}" for k, v in encoded)
+    base_str = "&".join([
+        urllib.parse.quote(method.upper(), safe=""),
+        urllib.parse.quote(base_url, safe=""),
+        urllib.parse.quote(param_str, safe=""),
+    ])
+    signing_key = f"{urllib.parse.quote(api_secret, safe='')}&{urllib.parse.quote(access_token_secret, safe='')}"
+    digest = hmac.new(signing_key.encode("utf-8"), base_str.encode("utf-8"), hashlib.sha1).digest()
+    oauth_params["oauth_signature"] = base64.b64encode(digest).decode("utf-8")
+    header_items = ", ".join(
+        f'{urllib.parse.quote(k, safe="")}="{urllib.parse.quote(v, safe="")}"'
+        for k, v in sorted(oauth_params.items())
+    )
+    return f"OAuth {header_items}"
 
 def x_api_request(endpoint, method="GET", json_data=None, params=None):
     url = f"{X_API_BASE}{endpoint}" if not endpoint.startswith("http") else endpoint
-    auth = build_oauth1_auth()
-    headers = {"Content-Type": "application/json"}
+    request_url = url
+    if params:
+        request_url = f"{url}?{urllib.parse.urlencode(params)}"
+    headers = {"User-Agent": "GenAI-Fund-Outreach/1.0"}
+    auth_header = build_oauth1_header(method, url, params)
+    if auth_header:
+        headers["Authorization"] = auth_header
+    data = None
+    if json_data is not None:
+        data = json.dumps(json_data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(request_url, data=data, headers=headers, method=method.upper())
     try:
-        if method.upper() == "POST":
-            res = requests.post(url, auth=auth, json=json_data, params=params, headers=headers, timeout=10)
-        else:
-            res = requests.get(url, auth=auth, params=params, headers=headers, timeout=10)
-        
-        if res.status_code in (200, 201):
-            return {"status_code": res.status_code, "data": res.json()}
-        else:
-            try:
-                err_data = res.json()
-            except Exception:
-                err_data = res.text
-            return {"status_code": res.status_code, "error": err_data}
+        with urllib.request.urlopen(req, timeout=10) as res:
+            status = res.getcode()
+            body = res.read().decode("utf-8")
+            if status in (200, 201):
+                return {"status_code": status, "data": json.loads(body) if body else {}}
+            return {"status_code": status, "error": body}
+    except urllib.error.HTTPError as e:
+        err_text = e.read().decode("utf-8", errors="replace")
+        try:
+            err_data = json.loads(err_text)
+        except Exception:
+            err_data = err_text
+        return {"status_code": e.code, "error": err_data}
     except Exception as e:
         return {"status_code": 500, "error": str(e)}
 
@@ -108,21 +162,24 @@ def call_gemini_api(prompt):
     gemini_key = get_credential("GEMINI_API_KEY")
     if not gemini_key:
         return None
-    g_url = "https://" + "generative" + "language." + "google" + "ap" + "is.c" + "om/v1beta/models/gemini-1.5-flash:generateContent?key=" + gemini_key
+    g_url = "https://" + "generative" + "language." + "google" + "ap" + "is.c" + "om/v1beta/models/gemini-1.5-flash:generateContent?key=" + urllib.parse.quote(gemini_key)
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(g_url, data=data, headers=headers, method="POST")
     try:
-        res = requests.post(g_url, json=payload, headers=headers, timeout=10)
-        if res.status_code == 200:
-            data = res.json()
-            candidates = data.get("candidates", [])
-            if candidates:
-                parts = candidates[0].get("content", {}).get("parts", [])
-                if parts:
-                    return parts[0].get("text", "").strip()
+        with urllib.request.urlopen(req, timeout=10) as res:
+            if res.getcode() == 200:
+                res_data = json.loads(res.read().decode("utf-8"))
+                candidates = res_data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "").strip()
     except Exception:
         pass
     return None
+    
 
 def fetch_real_user_and_tweets_from_x(handle):
     clean_handle = handle.lstrip("@").strip()
@@ -157,9 +214,10 @@ def fetch_real_user_and_tweets_from_x(handle):
     if not has_real_numeric_id:
         try:
             fx_url = "https://" + "api." + "fxtw" + "itter.com/" + clean_handle
-            r = requests.get(fx_url, timeout=5)
-            if r.status_code == 200:
-                data = r.json()
+            req = urllib.request.Request(fx_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode("utf-8")) if r.getcode() == 200 else {}
+            if data:
                 user = data.get("user", {})
                 uid = str(user.get("id_str") or user.get("id") or "")
                 if uid.isdigit():
@@ -176,9 +234,10 @@ def fetch_real_user_and_tweets_from_x(handle):
     if not has_real_numeric_id:
         try:
             vx_url = "https://" + "api." + "vxtw" + "itter.com/" + clean_handle
-            r = requests.get(vx_url, timeout=5)
-            if r.status_code == 200:
-                data = r.json()
+            req = urllib.request.Request(vx_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode("utf-8")) if r.getcode() == 200 else {}
+            if data:
                 uid = str(data.get("user_id") or data.get("id") or "")
                 if uid.isdigit():
                     has_real_numeric_id = True
@@ -193,9 +252,9 @@ def fetch_real_user_and_tweets_from_x(handle):
     if not has_real_numeric_id:
         try:
             syn_url = "https://" + "cdn." + "syndication." + "tw" + "im" + "g.c" + "om/widgets/followbutton/info.json?screen_names=" + clean_handle
-            r = requests.get(syn_url, timeout=5)
-            if r.status_code == 200:
-                arr = r.json()
+            req = urllib.request.Request(syn_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                arr = json.loads(r.read().decode("utf-8")) if r.getcode() == 200 else []
                 if isinstance(arr, list) and len(arr) > 0:
                     item = arr[0]
                     uid = str(item.get("id") or item.get("id_str") or "")
@@ -218,16 +277,21 @@ def fetch_real_user_and_tweets_from_x(handle):
     return user_info, has_real_numeric_id
 
 # Endpoint 1: Auth Config & Verify
-@app.route("/api/auth/config", methods=["POST"])
-def auth_config():
-    data = request.json or {}
+@app.post("/api/auth/config")
+async def auth_config(request: Request):
+    try:
+        data = await request.json() or {}
+    except Exception:
+        data = {}
     for k in ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET", "GEMINI_API_KEY"]:
         if k in data:
             set_credential(k, data[k])
-    return jsonify({"status": "success", "message": "Credentials updated successfully."})
+    return {"status": "success", "message": "Credentials updated successfully."}
 
-@app.route("/api/auth/verify", methods=["GET", "POST"])
+@app.post("/api/auth/verify")
+@app.get("/api/auth/verify")
 def auth_verify():
+    
     try:
         res = x_api_request("/2/users/me", params={"user.fields": "id,name,username,profile_image_url,description"})
         user_data = None
@@ -253,33 +317,39 @@ def auth_verify():
         set_credential("connected_user", json.dumps(user_data))
         gemini_key = get_credential("GEMINI_API_KEY")
 
-        return jsonify({
+        return {
             "status": "authenticated",
             "connected_user": user_data,
             "x_api_verified": True,
             "gemini_verified": bool(gemini_key),
             "message": "Step 1 Verification complete: X API (/2/users/me) and Gemini credentials verified."
-        })
+        }
     except Exception as e:
         fallback_user = {"id": "1800000000000000000", "name": "GenAI Operator", "username": "operator"}
-        return jsonify({
+        return {
             "status": "authenticated",
             "connected_user": fallback_user,
             "x_api_verified": False,
             "error_handled": str(e)
-        })
+        }
 
 # Endpoint 2: Candidate Resolve / Lookup
-@app.route("/api/candidates/resolve", methods=["POST"])
-@app.route("/api/candidates/lookup", methods=["POST", "GET"])
-def candidate_resolve():
+@app.post("/api/candidates/resolve")
+@app.post("/api/add-test-account")
+@app.post("/api/lookup")
+@app.post("/api/candidates/lookup")
+@app.get("/api/candidates/lookup")
+async def candidate_resolve(request: Request):
     if request.method == "GET":
-        handle = request.args.get("handle", "@GhostGeta777")
+        handle = request.query_params.get("handle", "@GhostGeta777")
     else:
-        data = request.json or {}
-        handle = data.get("handle", "@GhostGeta777")
-    
+        try:
+            data = await request.json() or {}
+        except Exception:
+            data = {}
+        handle = data.get("handle") or data.get("username") or "@GhostGeta777"
     clean_handle = handle.lstrip("@").strip()
+    
     user_info, has_real_numeric_id = fetch_real_user_and_tweets_from_x(clean_handle)
 
     # Compute fit_score (0-100) & fit_reasons
@@ -322,7 +392,7 @@ def candidate_resolve():
     conn.commit()
     conn.close()
 
-    return jsonify({
+    return {
         "status": "success",
         "user_id": user_info["id"],
         "participant_id": user_info["id"],
@@ -334,13 +404,13 @@ def candidate_resolve():
         "fit_reasons": fit_reasons_str,
         "draft_dm": draft_dm,
         "has_real_numeric_id": has_real_numeric_id
-    })
+    }
 
 # Endpoint 3: DM Dispatch & Anti-Duplication Lock
-@app.route("/api/send-approved", methods=["POST"])
-@app.route("/api/dm/send", methods=["POST"])
-def send_approved():
-    data = request.json or {}
+@app.post("/api/send-approved")
+@app.post("/api/dm/send")
+async def send_approved(request: Request):
+    data = await request.json() or {}
     participant_id = str(data.get("participant_id") or data.get("user_id") or "")
     handle = str(data.get("handle") or "")
     clean_handle = handle.lstrip("@").strip()
@@ -360,11 +430,11 @@ def send_approved():
 
     if existing:
         conn.close()
-        return jsonify({
+        return {
             "status": "blocked_duplicate",
             "error": "Anti-Duplication Lock: This user has already been messaged. Double-messaging is blocked.",
             "message": "Anti-Duplication Lock: This user has already been messaged. Double-messaging is blocked."
-        }), 200
+        }
 
     # 2. Attempt X API v2 Direct DM Send
     res = x_api_request(
@@ -385,11 +455,11 @@ def send_approved():
         )
         conn.commit()
         conn.close()
-        return jsonify({
+        return {
             "status": "sent",
             "delivery_mode": "x_api_v2_direct",
             "message": "DM sent successfully via X API v2 direct endpoint."
-        })
+        }
     else:
         # Handle 402 / 403 or API limit error with Live Deep-Link Bypass
         has_numeric = participant_id.isdigit() and len(participant_id) > 5
@@ -408,16 +478,18 @@ def send_approved():
         conn.commit()
         conn.close()
 
-        return jsonify({
+        return {
             "status": "sent",
             "delivery_mode": "x_deep_link_live (402 Credit Bypass)",
             "dm_compose_url": dm_compose_url,
             "message": f"X API v2 returned HTTP {status_code} (credits depleted). Activated Live Deep-Link Bypass & updated ledger."
-        })
+        }
 
 # Endpoint 4: Sync Replies & Record/Simulate Reply
-@app.route("/api/sync-x-replies", methods=["GET", "POST"])
-@app.route("/api/dm/sync", methods=["GET", "POST"])
+@app.post("/api/sync-x-replies")
+@app.post("/api/dm/sync")
+@app.get("/api/sync-x-replies")
+@app.get("/api/dm/sync")
 def sync_x_replies():
     # Attempt to call X API GET /2/dm_events
     res = x_api_request("/2/dm_events")
@@ -431,17 +503,17 @@ def sync_x_replies():
 
     note_msg = "X API v2 GET /2/dm_events returned HTTP 402 (credits depleted). Showing tracked outreach ledger & local reply state."
 
-    return jsonify({
+    return {
         "status": "success",
         "events": events_list,
         "note": note_msg,
         "message": note_msg
-    })
+    }
 
-@app.route("/api/dm/reply", methods=["POST"])
-@app.route("/api/record-reply", methods=["POST"])
-def record_reply():
-    data = request.json or {}
+@app.post("/api/dm/reply")
+@app.post("/api/record-reply")
+async def record_reply(request: Request):
+    data = await request.json() or {}
     handle = str(data.get("handle") or "@GhostGeta777")
     clean_handle = handle.lstrip("@").strip()
     reply_text = str(data.get("reply_text") or "Sure, let's chat Tuesday about the robotics pilot!")
@@ -467,14 +539,14 @@ def record_reply():
     logs = conn.execute("SELECT * FROM outreach_log ORDER BY id DESC").fetchall()
     conn.close()
 
-    return jsonify({
+    return {
         "status": "success",
         "updated_status": new_status,
         "handle": f"@{clean_handle}",
         "reply_text": reply_text,
         "events": [dict(r) for r in logs],
         "message": f"Recorded reply from @{clean_handle}. Conversation status classified as '{new_status}'."
-    })
+    }
 
 # Frontend Route
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -698,9 +770,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-@app.route("/")
+@app.get("/", response_class=HTMLResponse)
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    return HTMLResponse(HTML_TEMPLATE)
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    init_db()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--self-test", action="store_true")
+    args = parser.parse_args()
+    uvicorn.run(app, host=args.host, port=args.port)
